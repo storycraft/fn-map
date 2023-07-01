@@ -53,8 +53,11 @@ impl Default for RawFnStore<'_> {
     }
 }
 
+unsafe impl Send for RawFnStore<'_> {}
+unsafe impl Sync for RawFnStore<'_> {}
+
 #[derive(Debug)]
-/// Single thread only [`FnStore`] implementation.
+/// Single thread only FnStore implementation.
 ///
 /// Uses RefCell to borrow inner Map mutably.
 pub struct LocalFnStore<'a>(RefCell<RawFnStore<'a>>);
@@ -85,7 +88,7 @@ impl Default for LocalFnStore<'_> {
 }
 
 #[derive(Debug)]
-/// Thread safe [`FnStore`] implementation.
+/// Thread safe FnStore implementation.
 ///
 /// Uses parking_lot's [`RwLock`] to accuire mutable access to Map.
 pub struct AtomicFnStore<'a>(RwLock<RawFnStore<'a>>);
@@ -148,7 +151,16 @@ impl Drop for ManuallyDealloc {
 
 #[cfg(test)]
 mod tests {
-    use crate::LocalFnStore;
+    use crate::{LocalFnStore, RawFnStore};
+
+    #[test]
+    fn test_trait() {
+        const fn is_send<T: Send>() {}
+        const fn is_sync<T: Sync>() {}
+
+        is_send::<RawFnStore<'static>>();
+        is_sync::<RawFnStore<'static>>();
+    }
 
     #[test]
     fn test() {
