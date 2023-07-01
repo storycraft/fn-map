@@ -10,7 +10,7 @@ use core::{marker::PhantomData, mem, ptr};
 use std::{cell::RefCell, collections::HashMap};
 
 use bumpalo::Bump;
-use parking_lot::RwLock;
+use parking_lot::Mutex;
 use type_key::TypeKey;
 
 #[derive(Debug)]
@@ -32,7 +32,7 @@ impl<'a> RawFnStore<'a> {
         }
     }
 
-    pub fn get_ptr<T: 'a>(&mut self, key: impl FnOnce() -> T) -> *const T {
+    pub fn get_ptr<T: 'a + Send>(&mut self, key: impl FnOnce() -> T) -> *const T {
         let val = self.map.entry(TypeKey::of_val(&key)).or_insert_with(|| {
             // SAFETY: Exclusively borrowed reference, original value is forgotten by Bump allocator and does not outlive.
             unsafe { ManuallyDealloc::new(self.bump.alloc((key)())) }
@@ -41,7 +41,7 @@ impl<'a> RawFnStore<'a> {
         val.ptr().cast::<T>()
     }
 
-    pub fn clear(&mut self) {
+    pub fn reset(&mut self) {
         self.map.clear();
         self.bump.reset();
     }
@@ -54,7 +54,6 @@ impl Default for RawFnStore<'_> {
 }
 
 unsafe impl Send for RawFnStore<'_> {}
-unsafe impl Sync for RawFnStore<'_> {}
 
 #[derive(Debug)]
 /// Single thread only FnStore implementation.
@@ -68,7 +67,7 @@ impl<'a> LocalFnStore<'a> {
     }
 
     /// Get or compute value using key
-    pub fn get<T: 'a>(&self, key: impl FnOnce() -> T) -> &T {
+    pub fn get<T: 'a + Send>(&self, key: impl FnOnce() -> T) -> &T {
         let ptr = self.0.borrow_mut().get_ptr(key);
 
         // SAFETY: pointer is valid and its reference cannot outlive more than Self
@@ -77,7 +76,7 @@ impl<'a> LocalFnStore<'a> {
 
     /// Reset stored values
     pub fn reset(&mut self) {
-        self.0.get_mut().clear();
+        self.0.get_mut().reset();
     }
 }
 
@@ -90,17 +89,17 @@ impl Default for LocalFnStore<'_> {
 #[derive(Debug)]
 /// Thread safe FnStore implementation.
 ///
-/// Uses parking_lot's [`RwLock`] to accuire mutable access to Map.
-pub struct AtomicFnStore<'a>(RwLock<RawFnStore<'a>>);
+/// Uses parking_lot's [`Mutex`] to accuire mutable access to Map.
+pub struct AtomicFnStore<'a>(Mutex<RawFnStore<'a>>);
 
 impl<'a> AtomicFnStore<'a> {
     pub fn new() -> Self {
-        Self(RwLock::new(RawFnStore::new()))
+        Self(Mutex::new(RawFnStore::new()))
     }
 
     /// Get or compute value and insert using key
-    pub fn get<T: 'a>(&self, key: impl FnOnce() -> T) -> &T {
-        let ptr = self.0.write().get_ptr(key);
+    pub fn get<T: 'a + Send>(&self, key: impl FnOnce() -> T) -> &T {
+        let ptr = self.0.lock().get_ptr(key);
 
         // SAFETY: pointer is valid and its reference cannot outlive more than Self
         unsafe { &*ptr }
@@ -108,7 +107,7 @@ impl<'a> AtomicFnStore<'a> {
 
     /// Reset stored values
     pub fn reset(&mut self) {
-        self.0.get_mut().clear();
+        self.0.get_mut().reset();
     }
 }
 
@@ -151,15 +150,19 @@ impl Drop for ManuallyDealloc {
 
 #[cfg(test)]
 mod tests {
-    use crate::{LocalFnStore, RawFnStore};
+    use crate::{AtomicFnStore, LocalFnStore, RawFnStore};
 
     #[test]
     fn test_trait() {
         const fn is_send<T: Send>() {}
         const fn is_sync<T: Sync>() {}
 
-        is_send::<RawFnStore<'static>>();
-        is_sync::<RawFnStore<'static>>();
+        is_send::<RawFnStore>();
+
+        is_send::<LocalFnStore>();
+
+        is_send::<AtomicFnStore>();
+        is_sync::<AtomicFnStore>();
     }
 
     #[test]
