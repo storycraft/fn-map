@@ -6,15 +6,16 @@
 
 #![doc = include_str!("../README.md")]
 
-use std::collections::HashMap;
+use std::{collections::HashMap, cell::RefCell};
 use core::{ptr, mem, marker::PhantomData};
 
 use bumpalo::Bump;
+use parking_lot::RwLock;
 use type_key::TypeKey;
 
 #[derive(Debug)]
 /// A Persistent value store using closure as key and storing its return value.
-pub struct FnStore<'a> {
+pub struct RawFnStore<'a> {
     map: HashMap<TypeKey, ManuallyDealloc>,
 
     // Ensure allocator always drops later than its value to prevent UB
@@ -22,18 +23,13 @@ pub struct FnStore<'a> {
     _phantom: PhantomData<&'a ()>,
 }
 
-impl<'a> FnStore<'a> {
+impl<'a> RawFnStore<'a> {
     pub fn new() -> Self {
         Self {
             map: HashMap::new(),
             bump: Bump::new(),
             _phantom: PhantomData,
         }
-    }
-
-    pub fn get<T: 'a>(&mut self, key: impl FnOnce() -> T) -> &mut T {
-        // SAFETY: The pointer does not outlive its value and exclusively borrowed.
-        unsafe { &mut *self.get_ptr(key).cast_mut() }
     }
 
     pub fn get_ptr<T: 'a>(&mut self, key: impl FnOnce() -> T) -> *const T {
@@ -53,7 +49,67 @@ impl<'a> FnStore<'a> {
     }
 }
 
-impl Default for FnStore<'_> {
+impl Default for RawFnStore<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub trait FnStore<'a> {
+    fn get<T: 'a>(&self, key: impl FnOnce() -> T) -> &T;
+
+    fn reset(&mut self);
+}
+
+#[derive(Debug)]
+pub struct LocalFnStore<'a>(RefCell<RawFnStore<'a>>);
+
+impl<'a> LocalFnStore<'a> {
+    pub fn new() -> Self {
+        Self(RefCell::new(RawFnStore::new()))
+    }
+}
+
+impl<'a> FnStore<'a> for LocalFnStore<'a> {
+    fn get<T: 'a>(&self, key: impl FnOnce() -> T) -> &T {
+        let ptr = self.0.borrow_mut().get_ptr(key);
+
+        unsafe { &*ptr }
+    }
+
+    fn reset(&mut self) {
+        self.0.get_mut().clear();
+    }
+}
+
+impl Default for LocalFnStore<'_> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug)]
+pub struct AtomicFnStore<'a>(RwLock<RawFnStore<'a>>);
+
+impl<'a> AtomicFnStore<'a> {
+    pub fn new() -> Self {
+        Self(RwLock::new(RawFnStore::new()))
+    }
+}
+
+impl<'a> FnStore<'a> for AtomicFnStore<'a> {
+    fn get<T: 'a>(&self, key: impl FnOnce() -> T) -> &T {
+        let ptr = self.0.write().get_ptr(key);
+
+        unsafe { &*ptr }
+    }
+
+    fn reset(&mut self) {
+        self.0.get_mut().clear();
+    }
+}
+
+impl Default for AtomicFnStore<'_> {
     fn default() -> Self {
         Self::new()
     }
@@ -95,11 +151,11 @@ impl Drop for ManuallyDealloc {
 
 #[cfg(test)]
 mod tests {
-    use crate::FnStore;
+    use crate::{FnStore, LocalFnStore};
 
     #[test]
     fn test() {
-        let mut store = FnStore::new();
+        let store = LocalFnStore::new();
         
         let a = store.get(|| 1);
         assert_eq!(*a, 1);
