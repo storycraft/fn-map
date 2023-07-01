@@ -5,6 +5,8 @@ version = "0.1.1"
 edition = "2021"
 authors = ["storycraft <storycraft@pancake.sh>"]
 license = "MIT"
+readme = "README.md"
+repository = "https://github.com/storycraft/fn-store/"
 
 [dependencies]
 type-key = "1"
