@@ -6,15 +6,15 @@
 
 #![doc = include_str!("../README.md")]
 
-use std::{collections::HashMap, cell::RefCell};
-use core::{ptr, mem, marker::PhantomData};
+use core::{marker::PhantomData, mem, ptr};
+use std::{cell::RefCell, collections::HashMap};
 
 use bumpalo::Bump;
 use parking_lot::RwLock;
 use type_key::TypeKey;
 
 #[derive(Debug)]
-/// A Persistent value store using closure as key and storing its return value.
+/// A raw persistent value store using closure as key and storing its return value.
 pub struct RawFnStore<'a> {
     map: HashMap<TypeKey, ManuallyDealloc>,
 
@@ -33,14 +33,12 @@ impl<'a> RawFnStore<'a> {
     }
 
     pub fn get_ptr<T: 'a>(&mut self, key: impl FnOnce() -> T) -> *const T {
-        let val = self
-            .map
-            .entry(TypeKey::of_val(&key))
-            .or_insert_with(|| 
-                // SAFETY: Exclusively borrowed reference, original value is forgotten by Bump allocator and does not outlive.
-                unsafe { ManuallyDealloc::new(self.bump.alloc((key)())) });
+        let val = self.map.entry(TypeKey::of_val(&key)).or_insert_with(|| {
+            // SAFETY: Exclusively borrowed reference, original value is forgotten by Bump allocator and does not outlive.
+            unsafe { ManuallyDealloc::new(self.bump.alloc((key)())) }
+        });
 
-         val.ptr().cast::<T>()
+        val.ptr().cast::<T>()
     }
 
     pub fn clear(&mut self) {
@@ -55,29 +53,27 @@ impl Default for RawFnStore<'_> {
     }
 }
 
-pub trait FnStore<'a> {
-    fn get<T: 'a>(&self, key: impl FnOnce() -> T) -> &T;
-
-    fn reset(&mut self);
-}
-
 #[derive(Debug)]
+/// Single thread only [`FnStore`] implementation.
+///
+/// Uses RefCell to borrow inner Map mutably.
 pub struct LocalFnStore<'a>(RefCell<RawFnStore<'a>>);
 
 impl<'a> LocalFnStore<'a> {
     pub fn new() -> Self {
         Self(RefCell::new(RawFnStore::new()))
     }
-}
 
-impl<'a> FnStore<'a> for LocalFnStore<'a> {
-    fn get<T: 'a>(&self, key: impl FnOnce() -> T) -> &T {
+    /// Get or compute value using key
+    pub fn get<T: 'a>(&self, key: impl FnOnce() -> T) -> &T {
         let ptr = self.0.borrow_mut().get_ptr(key);
 
+        // SAFETY: pointer is valid and its reference cannot outlive more than Self
         unsafe { &*ptr }
     }
 
-    fn reset(&mut self) {
+    /// Reset stored values
+    pub fn reset(&mut self) {
         self.0.get_mut().clear();
     }
 }
@@ -89,22 +85,26 @@ impl Default for LocalFnStore<'_> {
 }
 
 #[derive(Debug)]
+/// Thread safe [`FnStore`] implementation.
+///
+/// Uses parking_lot's [`RwLock`] to accuire mutable access to Map.
 pub struct AtomicFnStore<'a>(RwLock<RawFnStore<'a>>);
 
 impl<'a> AtomicFnStore<'a> {
     pub fn new() -> Self {
         Self(RwLock::new(RawFnStore::new()))
     }
-}
 
-impl<'a> FnStore<'a> for AtomicFnStore<'a> {
-    fn get<T: 'a>(&self, key: impl FnOnce() -> T) -> &T {
+    /// Get or compute value and insert using key
+    pub fn get<T: 'a>(&self, key: impl FnOnce() -> T) -> &T {
         let ptr = self.0.write().get_ptr(key);
 
+        // SAFETY: pointer is valid and its reference cannot outlive more than Self
         unsafe { &*ptr }
     }
 
-    fn reset(&mut self) {
+    /// Reset stored values
+    pub fn reset(&mut self) {
         self.0.get_mut().clear();
     }
 }
@@ -122,7 +122,7 @@ impl<T> Erased for T {}
 #[repr(transparent)]
 /// Manually deallocated pointer.
 /// It's intended to be used with bump allocator.
-/// 
+///
 /// # Safety
 /// Dereferencing the pointer is only safe when the pointer did not outlive its value
 struct ManuallyDealloc(*mut dyn Erased);
@@ -131,10 +131,7 @@ impl ManuallyDealloc {
     /// # Safety
     /// Calling this function is only safe if the value referenced by `reference is forgotten.
     pub unsafe fn new<T>(reference: &mut T) -> Self {
-        Self(
-            mem::transmute::<&mut dyn Erased, &mut dyn Erased>(reference)
-                as *mut _,
-        )
+        Self(mem::transmute::<&mut dyn Erased, &mut dyn Erased>(reference) as *mut _)
     }
 
     pub const fn ptr(&self) -> *const dyn Erased {
@@ -151,12 +148,12 @@ impl Drop for ManuallyDealloc {
 
 #[cfg(test)]
 mod tests {
-    use crate::{FnStore, LocalFnStore};
+    use crate::LocalFnStore;
 
     #[test]
     fn test() {
         let store = LocalFnStore::new();
-        
+
         let a = store.get(|| 1);
         assert_eq!(*a, 1);
     }
