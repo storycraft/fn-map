@@ -98,7 +98,7 @@ impl<'a> AtomicFnStore<'a> {
     }
 
     /// Get or compute value and insert using key
-    pub fn get<T: 'a + Send>(&self, key: impl FnOnce() -> T) -> &T {
+    pub fn get<T: 'a + Send + Sync>(&self, key: impl FnOnce() -> T) -> &T {
         let ptr = self.0.lock().get_ptr(key);
 
         // SAFETY: pointer is valid and its reference cannot outlive more than Self
