@@ -3,9 +3,9 @@ A dynamic persistent value store using closure type as key and storing its retur
 
 ## Usage
 ```rust
-use fn_store::FnStore;
+use fn_store::LocalFnStore;
 
-let mut store = FnStore::new();
+let mut store = LocalFnStore::new();
 
 let a = *store.get(|| 1);
 let b = *store.get(|| 2);
