@@ -32,7 +32,7 @@ impl<'a> RawFnStore<'a> {
         }
     }
 
-    pub fn get_ptr<T: 'a + Send>(&mut self, key: impl FnOnce() -> T) -> *const T {
+    pub fn get_ptr<T: 'a>(&mut self, key: impl FnOnce() -> T) -> *const T {
         let val = self.map.entry(TypeKey::of_val(&key)).or_insert_with(|| {
             // SAFETY: Exclusively borrowed reference, original value is forgotten by Bump allocator and does not outlive.
             unsafe { ManuallyDealloc::new(self.bump.alloc((key)())) }
@@ -52,8 +52,6 @@ impl Default for RawFnStore<'_> {
         Self::new()
     }
 }
-
-unsafe impl Send for RawFnStore<'_> {}
 
 #[derive(Debug)]
 /// Single thread only FnStore implementation.
@@ -86,6 +84,8 @@ impl Default for LocalFnStore<'_> {
     }
 }
 
+unsafe impl Send for LocalFnStore<'_> {}
+
 #[derive(Debug)]
 /// Thread safe FnStore implementation.
 ///
@@ -116,6 +116,9 @@ impl Default for AtomicFnStore<'_> {
         Self::new()
     }
 }
+
+unsafe impl Send for AtomicFnStore<'_> {}
+unsafe impl Sync for AtomicFnStore<'_> {}
 
 trait Erased {}
 impl<T> Erased for T {}
@@ -150,14 +153,12 @@ impl Drop for ManuallyDealloc {
 
 #[cfg(test)]
 mod tests {
-    use crate::{AtomicFnStore, LocalFnStore, RawFnStore};
+    use crate::{AtomicFnStore, LocalFnStore};
 
     #[test]
     fn test_trait() {
         const fn is_send<T: Send>() {}
         const fn is_sync<T: Sync>() {}
-
-        is_send::<RawFnStore>();
 
         is_send::<LocalFnStore>();
 
