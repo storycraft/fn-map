@@ -10,7 +10,7 @@ use core::{marker::PhantomData, mem, ptr};
 use std::{cell::RefCell, collections::HashMap};
 
 use bumpalo::Bump;
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 use type_key::TypeKey;
 
 #[derive(Debug)]
@@ -32,13 +32,18 @@ impl<'a> RawFnStore<'a> {
         }
     }
 
-    pub fn get_ptr<T: 'a>(&mut self, key: impl FnOnce() -> T) -> *const T {
-        let val = self.map.entry(TypeKey::of_val(&key)).or_insert_with(|| {
-            // SAFETY: Exclusively borrowed reference, original value is forgotten by Bump allocator and does not outlive.
-            unsafe { ManuallyDealloc::new(self.bump.alloc((key)())) }
-        });
+    pub fn get_ptr<T: 'a>(&self, key: &impl FnOnce() -> T) -> Option<*const T> {
+        Some(self.map.get(&TypeKey::of_val(key))?.ptr().cast::<T>())
+    }
 
-        val.ptr().cast::<T>()
+    pub fn insert_ptr<F: FnOnce() -> T, T: 'a>(&mut self, value: T) -> *const T {
+        // SAFETY: Exclusively borrowed reference, original value is forgotten by Bump allocator and does not outlive.
+        let value = unsafe { ManuallyDealloc::new(self.bump.alloc(value)) };
+        let ptr = value.ptr();
+
+        self.map.insert(TypeKey::of::<F>(), value);
+
+        ptr.cast::<T>()
     }
 
     pub fn reset(&mut self) {
@@ -65,10 +70,14 @@ impl<'a> LocalFnStore<'a> {
     }
 
     /// Get or compute value using key
-    pub fn get<T: 'a + Send>(&self, key: impl FnOnce() -> T) -> &T {
-        let ptr = self.0.borrow_mut().get_ptr(key);
+    pub fn get<T: 'a + Send, F: FnOnce() -> T>(&self, key: F) -> &T {
+        if let Some(ptr) = self.0.borrow().get_ptr(&key) {
+            return unsafe { &*ptr };
+        }
 
         // SAFETY: pointer is valid and its reference cannot outlive more than Self
+        let value = (key)();
+        let ptr = self.0.borrow_mut().insert_ptr::<F, T>(value);
         unsafe { &*ptr }
     }
 
@@ -89,18 +98,23 @@ unsafe impl Send for LocalFnStore<'_> {}
 #[derive(Debug)]
 /// Thread safe FnStore implementation.
 ///
-/// Uses parking_lot's [`Mutex`] to accuire mutable access to Map.
-pub struct AtomicFnStore<'a>(Mutex<RawFnStore<'a>>);
+/// Uses parking_lot's [`RwLock`] to accuire mutable access to Map.
+pub struct AtomicFnStore<'a>(RwLock<RawFnStore<'a>>);
 
 impl<'a> AtomicFnStore<'a> {
     pub fn new() -> Self {
-        Self(Mutex::new(RawFnStore::new()))
+        Self(RwLock::new(RawFnStore::new()))
     }
 
     /// Get or compute value and insert using key
-    pub fn get<T: 'a + Send + Sync>(&self, key: impl FnOnce() -> T) -> &T {
-        let ptr = self.0.lock().get_ptr(key);
+    pub fn get<T: 'a + Send + Sync, F: FnOnce() -> T>(&self, key: F) -> &T {
+        if let Some(ptr) = self.0.read().get_ptr(&key) {
+            // SAFETY: pointer is valid and its reference cannot outlive more than Self
+            return unsafe { &*ptr };
+        }
 
+        let value = (key)();
+        let ptr = self.0.write().insert_ptr::<F, T>(value);
         // SAFETY: pointer is valid and its reference cannot outlive more than Self
         unsafe { &*ptr }
     }
@@ -167,10 +181,32 @@ mod tests {
     }
 
     #[test]
-    fn test() {
+    fn test_local() {
         let store = LocalFnStore::new();
 
-        let a = store.get(|| 1);
+        fn one() -> i32 {
+            1
+        }
+
+        let b = store.get(|| store.get(one) + 1);
+        let a = store.get(one);
+
+        assert_eq!(*b, 2);
+        assert_eq!(*a, 1);
+    }
+
+    #[test]
+    fn test_atomic() {
+        let store = AtomicFnStore::new();
+
+        fn one() -> i32 {
+            1
+        }
+
+        let b = store.get(|| store.get(one) + 1);
+        let a = store.get(one);
+
+        assert_eq!(*b, 2);
         assert_eq!(*a, 1);
     }
 }
