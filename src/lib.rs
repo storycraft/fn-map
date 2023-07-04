@@ -37,13 +37,22 @@ impl<'a> RawFnStore<'a> {
     }
 
     pub fn insert_ptr<F: FnOnce() -> T, T: 'a>(&mut self, value: T) -> *const T {
-        // SAFETY: Exclusively borrowed reference, original value is forgotten by Bump allocator and does not outlive.
+        // SAFETY: Exclusively borrowed reference, original value is forgotten by Bump allocator and does not outlive
         let value = unsafe { ManuallyDealloc::new(self.bump.alloc(value)) };
         let ptr = value.ptr();
 
         self.map.insert(TypeKey::of::<F>(), value);
 
         ptr.cast::<T>()
+    }
+
+    pub fn get_or_insert_ptr<T: 'a>(&mut self, key: impl FnOnce() -> T) -> *const T {
+        // SAFETY: Exclusively borrowed reference, original value is forgotten by Bump allocator and does not outlive
+        self.map
+            .entry(TypeKey::of_val(&key))
+            .or_insert_with(|| unsafe { ManuallyDealloc::new(self.bump.alloc(key())) })
+            .ptr()
+            .cast::<T>()
     }
 
     pub fn reset(&mut self) {
@@ -69,16 +78,25 @@ impl<'a> LocalFnStore<'a> {
         Self(RefCell::new(RawFnStore::new()))
     }
 
-    /// Get or compute value using key
-    pub fn get<T: 'a + Send, F: FnOnce() -> T>(&self, key: F) -> &T {
+    fn get_ptr<T: 'a + Send, F: FnOnce() -> T>(&self, key: F) -> *const T {
         if let Some(ptr) = self.0.borrow().get_ptr(&key) {
-            return unsafe { &*ptr };
+            return ptr;
         }
 
-        // SAFETY: pointer is valid and its reference cannot outlive more than Self
-        let value = (key)();
-        let ptr = self.0.borrow_mut().insert_ptr::<F, T>(value);
-        unsafe { &*ptr }
+        let value = key();
+        self.0.borrow_mut().insert_ptr::<F, T>(value)
+    }
+
+    /// Get or compute value using key
+    pub fn get<T: 'a + Send, F: FnOnce() -> T>(&self, key: F) -> &T {
+        // SAFETY: pointer is valid and reference cannot outlive more than Self
+        unsafe { &*self.get_ptr(key) }
+    }
+
+    /// Get or compute value using key
+    pub fn get_mut<T: 'a + Send, F: FnOnce() -> T>(&mut self, key: F) -> &mut T {
+        // SAFETY: pointer is valid and exclusively reference cannot outlive more than Self
+        unsafe { &mut *self.0.get_mut().get_or_insert_ptr(key).cast_mut() }
     }
 
     /// Reset stored values
@@ -106,17 +124,25 @@ impl<'a> AtomicFnStore<'a> {
         Self(RwLock::new(RawFnStore::new()))
     }
 
-    /// Get or compute value and insert using key
-    pub fn get<T: 'a + Send + Sync, F: FnOnce() -> T>(&self, key: F) -> &T {
+    pub fn get_ptr<T: 'a + Send + Sync, F: FnOnce() -> T>(&self, key: F) -> *const T {
         if let Some(ptr) = self.0.read().get_ptr(&key) {
-            // SAFETY: pointer is valid and its reference cannot outlive more than Self
-            return unsafe { &*ptr };
+            return ptr;
         }
 
-        let value = (key)();
-        let ptr = self.0.write().insert_ptr::<F, T>(value);
-        // SAFETY: pointer is valid and its reference cannot outlive more than Self
-        unsafe { &*ptr }
+        let value = key();
+        self.0.write().insert_ptr::<F, T>(value)
+    }
+
+    /// Get or compute value and insert using key
+    pub fn get<T: 'a + Send + Sync, F: FnOnce() -> T>(&self, key: F) -> &T {
+        // SAFETY: pointer is valid and reference cannot outlive more than Self
+        unsafe { &*self.get_ptr(key) }
+    }
+
+    /// Get or compute value using key
+    pub fn get_mut<T: 'a + Send + Sync, F: FnOnce() -> T>(&mut self, key: F) -> &mut T {
+        // SAFETY: pointer is valid and exclusive reference cannot outlive more than Self
+        unsafe { &mut *self.0.get_mut().get_or_insert_ptr(key).cast_mut() }
     }
 
     /// Reset stored values
@@ -148,7 +174,7 @@ struct ManuallyDealloc(*mut dyn Erased);
 
 impl ManuallyDealloc {
     /// # Safety
-    /// Calling this function is only safe if the value referenced by `reference is forgotten.
+    /// Calling this function is only safe if the value is forgotten.
     pub unsafe fn new<T>(reference: &mut T) -> Self {
         Self(mem::transmute::<&mut dyn Erased, &mut dyn Erased>(reference) as *mut _)
     }
