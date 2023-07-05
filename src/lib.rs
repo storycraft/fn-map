@@ -78,7 +78,7 @@ impl<'a> LocalFnStore<'a> {
         Self(RefCell::new(RawFnStore::new()))
     }
 
-    fn get_ptr<T: 'a + Send, F: FnOnce() -> T>(&self, key: F) -> *const T {
+    pub fn get_ptr<T: 'a + Send, F: FnOnce() -> T>(&self, key: F) -> *const T {
         if let Some(ptr) = self.0.borrow().get_ptr(&key) {
             return ptr;
         }
