@@ -5,16 +5,17 @@
  */
 
 use core::{marker::PhantomData, mem, ptr};
-use std::mem::ManuallyDrop;
+use std::{hash::BuildHasherDefault, mem::ManuallyDrop};
 
 use bumpalo::Bump;
 use hashbrown::HashMap;
+use rustc_hash::FxHasher;
 use type_key::TypeKey;
 
 #[derive(Debug)]
 /// A raw persistent value store using closure as key and storing its return value.
 pub struct RawFnStore<'a> {
-    map: HashMap<TypeKey, ManuallyDealloc>,
+    map: HashMap<TypeKey, ManuallyDealloc, BuildHasherDefault<FxHasher>>,
 
     bump: ManuallyDrop<Bump>,
     _phantom: PhantomData<&'a ()>,
@@ -23,7 +24,7 @@ pub struct RawFnStore<'a> {
 impl<'a> RawFnStore<'a> {
     pub fn new() -> Self {
         Self {
-            map: HashMap::new(),
+            map: HashMap::default(),
 
             bump: ManuallyDrop::new(Bump::new()),
             _phantom: PhantomData,
