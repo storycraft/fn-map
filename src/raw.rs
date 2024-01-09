@@ -5,6 +5,7 @@
  */
 
 use core::{marker::PhantomData, mem, ptr};
+use std::mem::ManuallyDrop;
 
 use bumpalo::Bump;
 use hashbrown::HashMap;
@@ -15,8 +16,7 @@ use type_key::TypeKey;
 pub struct RawFnStore<'a> {
     map: HashMap<TypeKey, ManuallyDealloc>,
 
-    // Ensure allocator always drops later than its value to prevent UB
-    bump: Bump,
+    bump: ManuallyDrop<Bump>,
     _phantom: PhantomData<&'a ()>,
 }
 
@@ -25,7 +25,7 @@ impl<'a> RawFnStore<'a> {
         Self {
             map: HashMap::new(),
 
-            bump: Bump::new(),
+            bump: ManuallyDrop::new(Bump::new()),
             _phantom: PhantomData,
         }
     }
@@ -62,6 +62,15 @@ impl<'a> RawFnStore<'a> {
 impl Default for RawFnStore<'_> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Drop for RawFnStore<'_> {
+    fn drop(&mut self) {
+        self.map.clear();
+
+        // SAFETY: Allocated pointers cannot be accessed anymore, drop called only once
+        unsafe { ManuallyDrop::drop(&mut self.bump) }
     }
 }
 
