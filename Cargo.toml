@@ -1,7 +1,7 @@
 [package]
 name = "fn-store"
 description = "A dynamic persistent value store using closure type as key and storing its return value."
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 authors = ["storycraft <storycraft@pancake.sh>"]
 license = "MIT"
@@ -13,3 +13,4 @@ type-key = "1"
 bumpalo = "3.13.0"
 parking_lot = "0.12.1"
 hashbrown = "0.14.0"
+rustc-hash = "1.1.0"
