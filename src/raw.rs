@@ -4,8 +4,7 @@
  * Copyright (c) storycraft. Licensed under the MIT Licence.
  */
 
-use core::{marker::PhantomData, mem, ptr};
-use std::{hash::BuildHasherDefault, mem::ManuallyDrop};
+use core::{hash::BuildHasherDefault, marker::PhantomData, mem, mem::ManuallyDrop, ptr};
 
 use bumpalo::Bump;
 use hashbrown::HashMap;
