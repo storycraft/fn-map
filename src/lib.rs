@@ -9,40 +9,47 @@
 pub mod raw;
 
 use parking_lot::RwLock;
-use std::cell::RefCell;
+use type_key::TypeKey;
+use std::cell::UnsafeCell;
 
-use crate::raw::RawFnStore;
+use crate::raw::RawStore;
 
 #[derive(Debug, Default)]
 /// Single thread only FnStore implementation.
 ///
-/// Uses RefCell to borrow inner Map mutably.
-pub struct LocalFnStore<'a>(RefCell<RawFnStore<'a>>);
+/// This implementation is zero cost.
+pub struct LocalFnStore<'a>(UnsafeCell<RawStore<'a>>);
 
 impl<'a> LocalFnStore<'a> {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn get_ptr<T: 'a + Send, F: FnOnce() -> T>(&self, key: F) -> *const T {
-        if let Some(ptr) = self.0.borrow().get_ptr(&key) {
+    pub fn get_ptr<T: 'a + Send>(&self, key_fn: impl FnOnce() -> T) -> *const T {
+        let key = TypeKey::of_val(&key_fn);
+
+        // SAFETY: safe to borrow shared because self is borrowed shared
+        if let Some(ptr) = unsafe { &*self.0.get().cast_const() }.get(&key) {
             return ptr;
         }
 
-        let value = key();
-        self.0.borrow_mut().insert_ptr::<F, T>(value)
+        // accuire value first before borrowing exclusively
+        let value = key_fn();
+
+        // SAFETY: safe to borrow exclusively since no one can borrow more
+        unsafe { &mut *self.0.get() }.insert(key, value)
     }
 
     /// Get or compute value using key
-    pub fn get<T: 'a + Send, F: FnOnce() -> T>(&self, key: F) -> &T {
+    pub fn get<T: 'a + Send>(&self, key: impl FnOnce() -> T) -> &T {
         // SAFETY: pointer is valid and reference cannot outlive more than Self
         unsafe { &*self.get_ptr(key) }
     }
 
     /// Get or compute value using key
-    pub fn get_mut<T: 'a + Send, F: FnOnce() -> T>(&mut self, key: F) -> &mut T {
-        // SAFETY: pointer is valid and exclusively reference cannot outlive more than Self
-        unsafe { &mut *self.0.get_mut().get_or_insert_ptr(key).cast_mut() }
+    pub fn get_mut<T: 'a + Send>(&mut self, key: impl FnOnce() -> T) -> &mut T {
+        // SAFETY: pointer is valid and reference cannot outlive more than Self
+        unsafe { &mut *self.get_ptr(key).cast_mut() }
     }
 
     /// Reset stored values
@@ -54,35 +61,41 @@ impl<'a> LocalFnStore<'a> {
 unsafe impl Send for LocalFnStore<'_> {}
 
 #[derive(Debug, Default)]
-/// Single thread only and non-Send FnStore implementation.
+/// Single thread only and non-Send FnStore implementation
 ///
-/// Uses RefCell to borrow inner Map mutably.
-pub struct LocalOnlyFnStore<'a>(RefCell<RawFnStore<'a>>);
+/// This implementation is zero cost.
+pub struct LocalOnlyFnStore<'a>(UnsafeCell<RawStore<'a>>);
 
 impl<'a> LocalOnlyFnStore<'a> {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn get_ptr<T: 'a, F: FnOnce() -> T>(&self, key: F) -> *const T {
-        if let Some(ptr) = self.0.borrow().get_ptr(&key) {
+    pub fn get_ptr<T: 'a + Send>(&self, key_fn: impl FnOnce() -> T) -> *const T {
+        let key = TypeKey::of_val(&key_fn);
+
+        // SAFETY: safe to borrow shared because self is borrowed shared
+        if let Some(ptr) = unsafe { &*self.0.get().cast_const() }.get(&key) {
             return ptr;
         }
 
-        let value = key();
-        self.0.borrow_mut().insert_ptr::<F, T>(value)
+        // accuire value first before borrowing exclusively
+        let value = key_fn();
+
+        // SAFETY: safe to borrow exclusively since no one can borrow more
+        unsafe { &mut *self.0.get() }.insert(key, value)
     }
 
     /// Get or compute value using key
-    pub fn get<T: 'a, F: FnOnce() -> T>(&self, key: F) -> &T {
+    pub fn get<T: 'a + Send>(&self, key: impl FnOnce() -> T) -> &T {
         // SAFETY: pointer is valid and reference cannot outlive more than Self
         unsafe { &*self.get_ptr(key) }
     }
 
     /// Get or compute value using key
-    pub fn get_mut<T: 'a, F: FnOnce() -> T>(&mut self, key: F) -> &mut T {
-        // SAFETY: pointer is valid and exclusively reference cannot outlive more than Self
-        unsafe { &mut *self.0.get_mut().get_or_insert_ptr(key).cast_mut() }
+    pub fn get_mut<T: 'a + Send>(&mut self, key: impl FnOnce() -> T) -> &mut T {
+        // SAFETY: pointer is valid and reference cannot outlive more than Self
+        unsafe { &mut *self.get_ptr(key).cast_mut() }
     }
 
     /// Reset stored values
@@ -95,32 +108,35 @@ impl<'a> LocalOnlyFnStore<'a> {
 /// Thread safe FnStore implementation.
 ///
 /// Uses parking_lot's [`RwLock`] to accuire mutable access to Map.
-pub struct AtomicFnStore<'a>(RwLock<RawFnStore<'a>>);
+pub struct AtomicFnStore<'a>(RwLock<RawStore<'a>>);
 
 impl<'a> AtomicFnStore<'a> {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn get_ptr<T: 'a + Send + Sync, F: FnOnce() -> T>(&self, key: F) -> *const T {
-        if let Some(ptr) = self.0.read().get_ptr(&key) {
+    pub fn get_ptr<T: 'a + Send + Sync>(&self, key_fn: impl FnOnce() -> T) -> *const T {
+        let key = TypeKey::of_val(&key_fn);
+
+        if let Some(ptr) = self.0.read().get(&key) {
             return ptr;
         }
 
-        let value = key();
-        self.0.write().insert_ptr::<F, T>(value)
-    }
+        let value = key_fn();
 
-    /// Get or compute value and insert using key
-    pub fn get<T: 'a + Send + Sync, F: FnOnce() -> T>(&self, key: F) -> &T {
-        // SAFETY: pointer is valid and reference cannot outlive more than Self
-        unsafe { &*self.get_ptr(key) }
+        self.0.write().insert(key, value)
     }
 
     /// Get or compute value using key
-    pub fn get_mut<T: 'a + Send + Sync, F: FnOnce() -> T>(&mut self, key: F) -> &mut T {
-        // SAFETY: pointer is valid and exclusive reference cannot outlive more than Self
-        unsafe { &mut *self.0.get_mut().get_or_insert_ptr(key).cast_mut() }
+    pub fn get<T: 'a + Send + Sync>(&self, key_fn: impl FnOnce() -> T) -> &T {
+        // SAFETY: pointer is valid and reference cannot outlive more than Self
+        unsafe { &*self.get_ptr(key_fn) }
+    }
+
+    /// Get or compute value using key
+    pub fn get_mut<T: 'a + Send + Sync, F>(&mut self, key_fn: impl FnOnce() -> T) -> &mut T {
+        // SAFETY: pointer is valid and reference cannot outlive more than Self
+        unsafe { &mut *self.get_ptr(key_fn).cast_mut() }
     }
 
     /// Reset stored values

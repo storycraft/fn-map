@@ -4,7 +4,8 @@
  * Copyright (c) storycraft. Licensed under the MIT Licence.
  */
 
-use core::{hash::BuildHasherDefault, marker::PhantomData, mem, mem::ManuallyDrop, ptr};
+use core::{hash::BuildHasherDefault, marker::PhantomData, mem::ManuallyDrop, ptr};
+use std::mem;
 
 use bumpalo::Bump;
 use hashbrown::HashMap;
@@ -12,15 +13,15 @@ use rustc_hash::FxHasher;
 use type_key::TypeKey;
 
 #[derive(Debug)]
-/// A raw persistent value store using closure as key and storing its return value.
-pub struct RawFnStore<'a> {
+/// A raw persistent value store
+pub struct RawStore<'a> {
     map: HashMap<TypeKey, ManuallyDealloc, BuildHasherDefault<FxHasher>>,
 
     bump: ManuallyDrop<Bump>,
     _phantom: PhantomData<&'a ()>,
 }
 
-impl<'a> RawFnStore<'a> {
+impl<'a> RawStore<'a> {
     pub fn new() -> Self {
         Self {
             map: HashMap::default(),
@@ -30,27 +31,22 @@ impl<'a> RawFnStore<'a> {
         }
     }
 
-    pub fn get_ptr<T: 'a>(&self, key: &impl FnOnce() -> T) -> Option<*const T> {
-        Some(self.map.get(&TypeKey::of_val(key))?.ptr().cast::<T>())
+    pub fn get<T: 'a>(&self, key: &TypeKey) -> Option<*const T> {
+        Some(self.map.get(key)?.ptr().cast::<T>())
     }
 
-    pub fn insert_ptr<F: FnOnce() -> T, T: 'a>(&mut self, value: T) -> *const T {
+    /// insert value
+    ///
+    /// Returned pointer is covariant to lifetime 'a where &'a mut self
+    pub fn insert<T: 'a>(&mut self, key: TypeKey, value: T) -> *const T {
         // SAFETY: Exclusively borrowed reference, original value is forgotten by Bump allocator and does not outlive
-        let value = unsafe { ManuallyDealloc::new(self.bump.alloc(value)) };
+        let value =
+            unsafe { ManuallyDealloc(mem::transmute(self.bump.alloc(value) as &mut dyn Erased)) };
         let ptr = value.ptr();
 
-        self.map.insert(TypeKey::of::<F>(), value);
+        self.map.insert(key, value);
 
         ptr.cast::<T>()
-    }
-
-    pub fn get_or_insert_ptr<T: 'a>(&mut self, key: impl FnOnce() -> T) -> *const T {
-        // SAFETY: Exclusively borrowed reference, original value is forgotten by Bump allocator and does not outlive
-        self.map
-            .entry(TypeKey::of_val(&key))
-            .or_insert_with(|| unsafe { ManuallyDealloc::new(self.bump.alloc(key())) })
-            .ptr()
-            .cast::<T>()
     }
 
     pub fn reset(&mut self) {
@@ -59,17 +55,17 @@ impl<'a> RawFnStore<'a> {
     }
 }
 
-impl Default for RawFnStore<'_> {
+impl Default for RawStore<'_> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Drop for RawFnStore<'_> {
+impl Drop for RawStore<'_> {
     fn drop(&mut self) {
         self.map.clear();
 
-        // SAFETY: Allocated pointers cannot be accessed anymore, drop called only once
+        // SAFETY: Manually dropped to ensure allocated objects to drop first
         unsafe { ManuallyDrop::drop(&mut self.bump) }
     }
 }
@@ -87,12 +83,6 @@ impl<T> Erased for T {}
 struct ManuallyDealloc(*mut dyn Erased);
 
 impl ManuallyDealloc {
-    /// # Safety
-    /// Calling this function is only safe if the value is forgotten.
-    pub unsafe fn new<T>(reference: &mut T) -> Self {
-        Self(mem::transmute::<&mut dyn Erased, &mut dyn Erased>(reference) as *mut _)
-    }
-
     pub const fn ptr(&self) -> *const dyn Erased {
         self.0.cast_const()
     }
@@ -100,7 +90,7 @@ impl ManuallyDealloc {
 
 impl Drop for ManuallyDealloc {
     fn drop(&mut self) {
-        // SAFETY: Safe to drop since its original was forgotten and only the pointer is pointing the value. See [`ManuallyDealloc::new`]
+        // SAFETY: Safe to drop since it is the only unique pointer
         unsafe { ptr::drop_in_place(self.0) }
     }
 }
