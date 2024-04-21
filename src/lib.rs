@@ -4,6 +4,7 @@
  * Copyright (c) storycraft. Licensed under the MIT Licence.
  */
 
+#![no_std]
 #![doc = include_str!("../README.md")]
 
 pub mod raw;
