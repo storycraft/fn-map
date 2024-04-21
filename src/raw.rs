@@ -4,17 +4,18 @@
  * Copyright (c) storycraft. Licensed under the MIT Licence.
  */
 
-use core::{hash::BuildHasherDefault, mem::ManuallyDrop, ptr, ptr::NonNull};
+use core::{mem::ManuallyDrop, ptr, ptr::NonNull};
 
 use bumpalo::Bump;
 use hashbrown::HashMap;
-use rustc_hash::FxHasher;
+use nohash_hasher::BuildNoHashHasher;
 use type_key::TypeKey;
 
 #[derive(Debug)]
-/// raw FnMap 
+/// raw FnMap
 pub struct RawFnMap {
-    map: HashMap<TypeKey, Val, BuildHasherDefault<FxHasher>>,
+    // [`TypeId`] only hashes lower 64 bits
+    map: HashMap<TypeKey, Val, BuildNoHashHasher<u64>>,
 
     bump: ManuallyDrop<Bump>,
 }
@@ -67,11 +68,6 @@ impl Drop for RawFnMap {
 
 #[derive(Debug)]
 #[repr(transparent)]
-/// Manually deallocated pointer.
-/// It's intended to be used with bump allocator.
-///
-/// # Safety
-/// Dereferencing the pointer is only safe when the pointer did not outlive its value
 struct Val(NonNull<()>);
 
 impl Val {
