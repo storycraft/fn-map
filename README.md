@@ -5,7 +5,7 @@ FnMap is a abstraction around the HashMap, like TypeMap. But uses closure's type
 ```rust
 use fn_map::FnMap;
 
-let mut map = FnMap::new();
+let map = FnMap::new();
 
 fn one() -> i32 {
     println!("one computed");
