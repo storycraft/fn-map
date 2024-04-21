@@ -8,9 +8,9 @@
 
 pub mod raw;
 
+use core::{cell::UnsafeCell, ptr::NonNull};
 use parking_lot::RwLock;
 use type_key::TypeKey;
-use std::{cell::UnsafeCell, ptr::NonNull};
 
 use crate::raw::RawFnMap;
 
