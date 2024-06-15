@@ -2,7 +2,7 @@
 name = "fn-map"
 description = "Abstraction around HashMap. Uses closure to compute and store value."
 keywords = ["typemap", "closure", "anymap", "hashmap"]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["storycraft <storycraft@pancake.sh>"]
 license = "MIT"
