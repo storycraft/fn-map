@@ -1,9 +1,3 @@
-/*
- * Created on Thu Jun 29 2023
- *
- * Copyright (c) storycraft. Licensed under the MIT Licence.
- */
-
 #![no_std]
 #![doc = include_str!("../README.md")]
 

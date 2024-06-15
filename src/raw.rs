@@ -1,9 +1,3 @@
-/*
- * Created on Thu Jul 06 2023
- *
- * Copyright (c) storycraft. Licensed under the MIT Licence.
- */
-
 use core::{mem::ManuallyDrop, ptr, ptr::NonNull};
 
 use bumpalo::Bump;
@@ -35,9 +29,9 @@ impl RawFnMap {
 
     /// insert value
     ///
-    /// Returned pointer is covariant to lifetime 'a where &'a mut self
+    /// Returned pointer cannot outlive Self
     pub fn insert<T: 'static>(&mut self, key: TypeKey, value: T) -> NonNull<T> {
-        let value = Val(NonNull::from(self.bump.alloc(value)).cast());
+        let value = Val(NonNull::from(self.bump.alloc(value)) as NonNull<dyn Erased>);
         let ptr = value.inner();
 
         self.map.insert(key, value);
@@ -66,13 +60,16 @@ impl Drop for RawFnMap {
     }
 }
 
+trait Erased {}
+impl<T: ?Sized> Erased for T {}
+
 #[derive(Debug)]
 #[repr(transparent)]
-struct Val(NonNull<()>);
+struct Val(NonNull<dyn Erased>);
 
 impl Val {
     pub const fn inner(&self) -> NonNull<()> {
-        self.0
+        self.0.cast()
     }
 }
 
